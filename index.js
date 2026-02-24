@@ -150,7 +150,6 @@ app.post('/api/set-cookies', async (req, res) => {
         // Normalize cookies: Puppeteer on about:blank will silently reject cookies
         // if they don't have an explicit URL or if the domain isn't fully matched.
         let normalizedCookies = [];
-
         cookies.forEach(c => {
             const cookie = { ...c };
             if (!cookie.url && cookie.domain) {
@@ -159,20 +158,20 @@ app.post('/api/set-cookies', async (req, res) => {
                 cookie.url = `https://${d}`;
             }
             normalizedCookies.push(cookie);
-
-            // YouTube SSO Bypass: Duplicate core Google Auth cookies to YouTube
-            const coreAuthCookies = ['__Secure-1PSID', '__Secure-3PSID', 'SID', 'HSID', 'SSID', 'APISID', 'SAPISID'];
-            if (coreAuthCookies.includes(cookie.name)) {
-                normalizedCookies.push({
-                    ...cookie,
-                    domain: '.youtube.com',
-                    url: 'https://youtube.com'
-                });
-            }
         });
 
         await page.setCookie(...normalizedCookies);
-        res.json({ success: true, message: 'Cookies injected successfully.' });
+
+        // --- YouTube SSO (Single Sign-On) Magic ---
+        // Just injecting cookies isn't enough for YouTube anymore. We must force
+        // Google to officially issue YouTube cookies by visiting the ServiceLogin.
+        const ssoPage = await browser.newPage();
+        await ssoPage.goto('https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com/&hl=en', { waitUntil: 'load', timeout: 15000 }).catch(() => { });
+        // Wait briefly for redirect to finish setting YouTube cookies
+        await new Promise(r => setTimeout(r, 2000));
+        await ssoPage.close().catch(() => { });
+
+        res.json({ success: true, message: 'Cookies injected and SSO synchronized.' });
     } catch (e) {
         console.error(`[Cookies Error] ${accountId}: ${e.message}`);
         res.status(500).json({ error: e.message });
