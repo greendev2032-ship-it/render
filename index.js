@@ -2,13 +2,9 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const UserAgent = require('user-agents');
+const { connect } = require('puppeteer-real-browser');
 const path = require('path');
 const fs = require('fs');
-
-puppeteer.use(StealthPlugin());
 
 const app = express();
 const server = http.createServer(app);
@@ -38,61 +34,34 @@ async function getSession(accountId) {
     console.log(`[Session] Starting new browser for account: ${accountId}`);
     const userDataDir = path.join(PROFILE_DIR, accountId);
 
-    const browser = await puppeteer.launch({
-        headless: 'new', // Use the new headless mode which is harder to detect
-        userDataDir,
-        ignoreDefaultArgs: ["--enable-automation"], // Crucial to hide automation bar and flags
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-blink-features=AutomationControlled',
-            '--window-size=1280,800',
-            '--disable-web-security',
-            '--disable-features=IsolateOrigins,site-per-process',
-            '--allow-running-insecure-content',
-            '--disable-notifications',
-            '--disable-popup-blocking',
-        ],
-    });
-
-    const page = await browser.newPage();
-
-    // Generate a highly realistic Windows Desktop user agent
-    const userAgent = new UserAgent({ deviceCategory: 'desktop', platform: 'Win32' });
-    await page.setUserAgent(userAgent.toString());
-
-    // Advanced Stealth: Hide webdriver and mock plugins/languages
-    await page.evaluateOnNewDocument(() => {
-        // 1. Pass webdriver check
-        Object.defineProperty(navigator, 'webdriver', { get: () => false });
-
-        // 2. Pass chrome execution check
-        window.navigator.chrome = { runtime: {}, app: {}, csid: {}, loadTimes: {} };
-
-        // 3. Pass plugins check
-        Object.defineProperty(navigator, 'plugins', {
-            get: () => [
-                {
-                    0: { type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format", enabledPlugin: Plugin },
-                    description: "Portable Document Format",
-                    filename: "internal-pdf-viewer",
-                    length: 1,
-                    name: "Chrome PDF Plugin"
-                }
+    try {
+        const { browser, page } = await connect({
+            headless: 'new',
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled',
+                '--window-size=1280,800',
+                '--disable-web-security',
             ],
+            customConfig: {
+                userDataDir,
+                // puppeteer-real-browser automatically handles user-agent, navigator.webdriver, plugins, etc. natively
+            },
+            turnstile: true // Auto-solves cloudflare turnstile
         });
 
-        // 4. Pass languages check
-        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-    });
+        await page.setViewport({ width: 1280, height: 800 });
+        await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
 
-    await page.setViewport({ width: 1280, height: 800 });
-    await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
-
-    sessions[accountId] = { browser, page };
-    console.log(`[Session] Browser ready for account: ${accountId}`);
-    return sessions[accountId];
+        sessions[accountId] = { browser, page };
+        console.log(`[Session] Browser ready for account: ${accountId}`);
+        return sessions[accountId];
+    } catch (e) {
+        console.error(`[Session error] Failed to launch for ${accountId}:`, e);
+        throw e;
+    }
 }
 
 // ─── Health Check ────────────────────────────────────────────────────────────
