@@ -150,33 +150,43 @@ app.post('/api/set-cookies', async (req, res) => {
         // Normalize cookies: Puppeteer on about:blank will silently reject cookies
         // if they don't have an explicit URL or if the domain isn't fully matched.
         let normalizedCookies = [];
+        let youtubeClones = [];
+
         cookies.forEach(c => {
-            const cookie = { ...c };
-            if (!cookie.url && cookie.domain) {
-                let d = cookie.domain;
+            // 1. Google Cookie
+            const gCookie = { ...c };
+            if (!gCookie.url && gCookie.domain) {
+                let d = gCookie.domain;
                 if (d.startsWith('.')) d = d.substring(1);
-                cookie.url = `https://${d}`;
+                gCookie.url = `https://${d}`;
             }
-            normalizedCookies.push(cookie);
+            normalizedCookies.push(gCookie);
+
+            // 2. YouTube Clone
+            // We forcefully clone EVERY Google cookie over to YouTube's domain
+            // Because YouTube checks SAPISID, APISID, SSID, HSID, SID, plus SECURE ones.
+            const ytCookie = { ...gCookie };
+            ytCookie.domain = '.youtube.com';
+            ytCookie.url = 'https://youtube.com';
+            youtubeClones.push(ytCookie);
         });
 
-        await page.setCookie(...normalizedCookies);
+        // Inject both domains
+        await page.setCookie(...normalizedCookies, ...youtubeClones);
 
         // --- YouTube SSO (Single Sign-On) Magic ---
-        // Just injecting cookies isn't enough for YouTube anymore. We must force
-        // Google to officially issue YouTube cookies by visiting the ServiceLogin.
         try {
             const browserInstance = page.browser();
             const ssoPage = await browserInstance.newPage();
-            await ssoPage.goto('https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com/&hl=en', { waitUntil: 'load', timeout: 15000 }).catch(() => { });
-            // Wait briefly for redirect to finish setting YouTube cookies
-            await new Promise(r => setTimeout(r, 2000));
+            // Visit YouTube directly so its internal JS sees the cloned cookies and confirms the session
+            await ssoPage.goto('https://www.youtube.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => { });
+            await new Promise(r => setTimeout(r, 3000));
             await ssoPage.close().catch(() => { });
         } catch (ssoError) {
             console.error(`[SSO Warning] Could not sync YouTube: ${ssoError.message}`);
         }
 
-        res.json({ success: true, message: 'Cookies injected and SSO synchronized.' });
+        res.json({ success: true, message: 'Cookies injected and SSO synchronized for Google & YouTube.' });
     } catch (e) {
         console.error(`[Cookies Error] ${accountId}: ${e.message}`);
         res.status(500).json({ error: e.message });
