@@ -149,7 +149,15 @@ app.post('/api/set-cookies', async (req, res) => {
 
         // Normalize cookies: Puppeteer on about:blank will silently reject cookies
         // if they don't have an explicit URL or if the domain isn't fully matched.
+        // Normalize cookies and silently clone auth cookies to other Google domains
         let normalizedCookies = [];
+
+        // These are the ONLY cookies that matter for Google SSO across services
+        const AUTH_COOKIE_NAMES = ['SID', 'HSID', 'SSID', 'APISID', 'SAPISID', '__Secure-1PSID', '__Secure-3PSID'];
+
+        // All Google service domains that need the auth cookies
+        const GOOGLE_DOMAINS = ['.youtube.com', '.google.com'];
+
         cookies.forEach(c => {
             const cookie = { ...c };
             if (!cookie.url && cookie.domain) {
@@ -158,32 +166,28 @@ app.post('/api/set-cookies', async (req, res) => {
                 cookie.url = `https://${d}`;
             }
             normalizedCookies.push(cookie);
+
+            // Silently clone ONLY critical auth cookies to other Google domains
+            // No background tabs, no network requests = Google cannot detect this
+            if (AUTH_COOKIE_NAMES.includes(cookie.name)) {
+                for (const domain of GOOGLE_DOMAINS) {
+                    // Skip if cookie is already for this domain
+                    if (cookie.domain === domain) continue;
+                    let cleanDomain = domain;
+                    if (cleanDomain.startsWith('.')) cleanDomain = cleanDomain.substring(1);
+                    normalizedCookies.push({
+                        ...cookie,
+                        domain: domain,
+                        url: `https://${cleanDomain}`
+                    });
+                }
+            }
         });
 
+        console.log(`[Cookies] Injecting ${normalizedCookies.length} total cookies (original + SSO clones) for ${accountId}`);
         await page.setCookie(...normalizedCookies);
 
-        // --- Safe SSO Propagation (YouTube & Colab) ---
-        // We use Google's official ServiceLogin endpoints natively in a hidden tab.
-        // Google will read the injected cookies and generate the YouTube/Colab 
-        // tokens itself, completely avoiding session bans.
-        try {
-            const ssoPage = await page.browser().newPage();
-
-            // 1. YouTube SSO
-            await ssoPage.goto('https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com/', { waitUntil: 'load', timeout: 15000 }).catch(() => { });
-            await new Promise(r => setTimeout(r, 2000));
-
-            // 2. Colab SSO
-            await ssoPage.goto('https://accounts.google.com/ServiceLogin?service=colab&continue=https://colab.research.google.com/', { waitUntil: 'load', timeout: 15000 }).catch(() => { });
-            await new Promise(r => setTimeout(r, 2000));
-
-            await ssoPage.close().catch(() => { });
-            console.log(`[Cookies] SSO Sync completed for ${accountId}`);
-        } catch (ssoError) {
-            console.error(`[SSO Error] ${accountId}: ${ssoError.message}`);
-        }
-
-        res.json({ success: true, message: 'Cookies injected and SSO natively synchronized.' });
+        res.json({ success: true, message: `Cookies injected: ${cookies.length} original + ${normalizedCookies.length - cookies.length} SSO clones` });
     } catch (e) {
         console.error(`[Cookies Error] ${accountId}: ${e.message}`);
         res.status(500).json({ error: e.message });
