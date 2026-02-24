@@ -40,10 +40,12 @@ async function getSession(accountId) {
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-blink-features=AutomationControlled',
+            '--window-size=1280,800',
         ],
     });
 
     const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
 
     sessions[accountId] = { browser, page };
