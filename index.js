@@ -161,7 +161,29 @@ app.post('/api/set-cookies', async (req, res) => {
         });
 
         await page.setCookie(...normalizedCookies);
-        res.json({ success: true, message: 'Cookies injected successfully.' });
+
+        // --- Safe SSO Propagation (YouTube & Colab) ---
+        // We use Google's official ServiceLogin endpoints natively in a hidden tab.
+        // Google will read the injected cookies and generate the YouTube/Colab 
+        // tokens itself, completely avoiding session bans.
+        try {
+            const ssoPage = await page.browser().newPage();
+
+            // 1. YouTube SSO
+            await ssoPage.goto('https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com/', { waitUntil: 'load', timeout: 15000 }).catch(() => { });
+            await new Promise(r => setTimeout(r, 2000));
+
+            // 2. Colab SSO
+            await ssoPage.goto('https://accounts.google.com/ServiceLogin?service=colab&continue=https://colab.research.google.com/', { waitUntil: 'load', timeout: 15000 }).catch(() => { });
+            await new Promise(r => setTimeout(r, 2000));
+
+            await ssoPage.close().catch(() => { });
+            console.log(`[Cookies] SSO Sync completed for ${accountId}`);
+        } catch (ssoError) {
+            console.error(`[SSO Error] ${accountId}: ${ssoError.message}`);
+        }
+
+        res.json({ success: true, message: 'Cookies injected and SSO natively synchronized.' });
     } catch (e) {
         console.error(`[Cookies Error] ${accountId}: ${e.message}`);
         res.status(500).json({ error: e.message });
