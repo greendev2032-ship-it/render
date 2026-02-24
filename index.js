@@ -254,22 +254,28 @@ io.on('connection', (socket) => {
         console.log(`[Socket] Starting stream for ${accountId}`);
 
         try {
-            const { page } = await getSession(accountId);
+            await getSession(accountId);
+            console.log(`[Stream] Session ready for ${accountId}, starting frame loop.`);
 
-            // Broadcast loop: ~10 FPS
+            // Broadcast loop: ~8 FPS — re-fetches page ref each tick so nav doesn't stale it
             if (streamInterval) clearInterval(streamInterval);
             streamInterval = setInterval(async () => {
                 if (socket.disconnected) return clearInterval(streamInterval);
                 try {
-                    const screenshot = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 50 });
+                    const { page } = await getSession(currentAccount);
+                    if (!page) return;
+                    const screenshot = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 60 });
                     socket.emit('browser-frame', screenshot);
                 } catch (e) {
-                    // Ignore errors during navigation/reloads
+                    if (!e.message.includes('detached') && !e.message.includes('closed')) {
+                        console.error(`[Stream] Screenshot error: ${e.message}`);
+                    }
                 }
-            }, 100); // 100ms = 10 FPS
+            }, 125); // 125ms = ~8 FPS
 
         } catch (e) {
             console.error(`[Socket] Stream start error: ${e.message}`);
+            socket.emit('stream-error', e.message);
         }
     });
 
