@@ -40,14 +40,13 @@ async function getSession(accountId) {
 
     try {
         const browser = await puppeteer.launch({
-            headless: 'new',
+            headless: true, // "new" is often detected by Google's latest ML models, reverting to true
             userDataDir,
             ignoreDefaultArgs: ["--enable-automation"],
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled',
                 '--window-size=1280,800',
                 '--disable-web-security',
                 '--disable-features=IsolateOrigins,site-per-process',
@@ -58,6 +57,12 @@ async function getSession(accountId) {
         });
 
         const page = await browser.newPage();
+
+        // Bypass generic WebRTC leaks
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
+        });
 
         // Generate a highly realistic Windows Desktop user agent
         const userAgent = new UserAgent({ deviceCategory: 'desktop', platform: 'Win32' });
@@ -94,6 +99,18 @@ async function getSession(accountId) {
                     Promise.resolve({ state: Notification.permission }) :
                     originalQuery(parameters)
             );
+            // 6. Delete CDP (Chrome DevTools Protocol) fingerprint
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+        });
+
+        // Request Interception to remove webdriver signatures from network requests
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+            const headers = Object.assign({}, request.headers());
+            delete headers['sec-ch-ua-headless'];
+            request.continue({ headers });
         });
 
         await page.setViewport({ width: 1280, height: 800 });
