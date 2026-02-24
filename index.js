@@ -147,35 +147,20 @@ app.post('/api/set-cookies', async (req, res) => {
         console.log(`[Cookies] Injecting ${cookies.length} cookies for ${accountId}`);
         const { page } = await getSession(accountId);
 
-        // Normalize cookies and clone ALL to YouTube domain
-        // KEY INSIGHT: Cloning only 7 cookies failed. YouTube needs ALL of them.
-        // The previous "signed out" ban was caused by opening background tabs,
-        // NOT by the cookie cloning itself. So we clone everything but open NOTHING.
-        let normalizedCookies = [];
-
-        cookies.forEach(c => {
+        // Normalize cookies: add URL field if missing so Puppeteer accepts them
+        const normalizedCookies = cookies.map(c => {
             const cookie = { ...c };
             if (!cookie.url && cookie.domain) {
                 let d = cookie.domain;
                 if (d.startsWith('.')) d = d.substring(1);
                 cookie.url = `https://${d}`;
             }
-            normalizedCookies.push(cookie);
-
-            // Clone every single cookie to .youtube.com
-            if (cookie.domain && cookie.domain.includes('google')) {
-                normalizedCookies.push({
-                    ...cookie,
-                    domain: '.youtube.com',
-                    url: 'https://youtube.com'
-                });
-            }
+            return cookie;
         });
 
-        console.log(`[Cookies] Injecting ${normalizedCookies.length} total cookies (${cookies.length} original + ${normalizedCookies.length - cookies.length} YouTube clones) for ${accountId}`);
+        console.log(`[Cookies] Injecting ${normalizedCookies.length} cookies for ${accountId}`);
         await page.setCookie(...normalizedCookies);
-
-        res.json({ success: true, message: `Cookies injected: ${cookies.length} original + ${normalizedCookies.length - cookies.length} YouTube clones. Navigate to YouTube/Colab yourself!` });
+        res.json({ success: true, message: `${normalizedCookies.length} cookies injected successfully.` });
     } catch (e) {
         console.error(`[Cookies Error] ${accountId}: ${e.message}`);
         res.status(500).json({ error: e.message });
