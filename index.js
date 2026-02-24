@@ -125,7 +125,6 @@ app.post('/api/type', async (req, res) => {
 });
 
 // ─── CLOSE SESSION ────────────────────────────────────────────────────────────
-// Close a specific account's browser to free resources
 app.post('/api/close', async (req, res) => {
     const { accountId } = req.body;
     if (!accountId) return res.status(400).json({ error: 'accountId is required' });
@@ -137,6 +136,68 @@ app.post('/api/close', async (req, res) => {
         res.json({ success: true, message: `Browser session closed for: ${accountId}` });
     } else {
         res.json({ success: false, message: 'No active session found for this account' });
+    }
+});
+
+// ─── CLICK BY COORDINATES ─────────────────────────────────────────────────────
+// Click at specific (x, y) pixel coordinates — used for interactive screenshot clicking
+app.post('/api/click-coords', async (req, res) => {
+    const { accountId, x, y } = req.body;
+    if (!accountId || x === undefined || y === undefined) {
+        return res.status(400).json({ error: 'accountId, x, and y are required' });
+    }
+
+    try {
+        const { page } = await getSession(accountId);
+        await page.mouse.click(Number(x), Number(y));
+        console.log(`[Click-Coords] Account ${accountId} clicked at (${x}, ${y})`);
+
+        // Auto-screenshot after click so user sees the result
+        await page.waitForTimeout(600);
+        const screenshot = await page.screenshot({ encoding: 'base64' });
+        const title = await page.title();
+        const currentUrl = page.url();
+        res.json({ success: true, screenshot, title, currentUrl });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// ─── KEYBOARD KEY PRESS ───────────────────────────────────────────────────────
+// Press a keyboard key (e.g. Enter, Backspace, Tab, ArrowDown...)
+app.post('/api/key', async (req, res) => {
+    const { accountId, key } = req.body;
+    if (!accountId || !key) return res.status(400).json({ error: 'accountId and key are required' });
+
+    try {
+        const { page } = await getSession(accountId);
+        await page.keyboard.press(key);
+        console.log(`[Key] Account ${accountId} pressed: ${key}`);
+
+        await page.waitForTimeout(400);
+        const screenshot = await page.screenshot({ encoding: 'base64' });
+        res.json({ success: true, screenshot, title: await page.title(), currentUrl: page.url() });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// ─── SCROLL ───────────────────────────────────────────────────────────────────
+// Scroll the page up or down by pixels
+app.post('/api/scroll', async (req, res) => {
+    const { accountId, deltaY = 300 } = req.body;
+    if (!accountId) return res.status(400).json({ error: 'accountId is required' });
+
+    try {
+        const { page } = await getSession(accountId);
+        await page.mouse.wheel({ deltaY: Number(deltaY) });
+        console.log(`[Scroll] Account ${accountId} scrolled by ${deltaY}px`);
+
+        await page.waitForTimeout(400);
+        const screenshot = await page.screenshot({ encoding: 'base64' });
+        res.json({ success: true, screenshot, title: await page.title(), currentUrl: page.url() });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 
