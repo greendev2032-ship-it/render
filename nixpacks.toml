@@ -1,6 +1,10 @@
 [phases.setup]
-nixPkgs = ["nodejs_20", "chromium", "nss", "freetype", "harfbuzz", "ca-certificates", "wget", "glib"]
+nixPkgs = ["nodejs_20", "chromium", "nss", "freetype", "harfbuzz", "ca-certificates", "wget", "glib", "xvfb-run", "xorg.xauth"]
 
 [variables]
 PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
 PUPPETEER_EXECUTABLE_PATH = "/nix/var/nix/profiles/default/bin/chromium"
+DISPLAY = ":99"
+
+[start]
+cmd = "xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24 -ac +extension GLX +render -noreset' node index.js"
