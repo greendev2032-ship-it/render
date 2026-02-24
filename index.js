@@ -135,6 +135,25 @@ app.get('/', (req, res) => {
     });
 });
 
+// ─── SET COOKIES ─────────────────────────────────────────────────────────────
+// Inject pre-authenticated cookies to bypass Google Login blocks
+app.post('/api/set-cookies', async (req, res) => {
+    const { accountId, cookies } = req.body;
+    if (!accountId || !cookies || !Array.isArray(cookies)) {
+        return res.status(400).json({ error: 'accountId and a cookies array are required' });
+    }
+
+    try {
+        console.log(`[Cookies] Injecting ${cookies.length} cookies for ${accountId}`);
+        const { page } = await getSession(accountId);
+        await page.setCookie(...cookies);
+        res.json({ success: true, message: 'Cookies injected successfully.' });
+    } catch (e) {
+        console.error(`[Cookies Error] ${accountId}: ${e.message}`);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // ─── NAVIGATE ────────────────────────────────────────────────────────────────
 // Go to a URL for a specific account
 app.post('/api/delete-session', async (req, res) => {
