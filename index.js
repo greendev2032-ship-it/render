@@ -149,15 +149,26 @@ app.post('/api/set-cookies', async (req, res) => {
 
         // Normalize cookies: Puppeteer on about:blank will silently reject cookies
         // if they don't have an explicit URL or if the domain isn't fully matched.
-        const normalizedCookies = cookies.map(c => {
+        let normalizedCookies = [];
+
+        cookies.forEach(c => {
             const cookie = { ...c };
-            // Ensure the URL exists based on the domain so Puppeteer accepts it
             if (!cookie.url && cookie.domain) {
                 let d = cookie.domain;
                 if (d.startsWith('.')) d = d.substring(1);
                 cookie.url = `https://${d}`;
             }
-            return cookie;
+            normalizedCookies.push(cookie);
+
+            // YouTube SSO Bypass: Duplicate core Google Auth cookies to YouTube
+            const coreAuthCookies = ['__Secure-1PSID', '__Secure-3PSID', 'SID', 'HSID', 'SSID', 'APISID', 'SAPISID'];
+            if (coreAuthCookies.includes(cookie.name)) {
+                normalizedCookies.push({
+                    ...cookie,
+                    domain: '.youtube.com',
+                    url: 'https://youtube.com'
+                });
+            }
         });
 
         await page.setCookie(...normalizedCookies);
