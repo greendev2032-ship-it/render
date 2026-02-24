@@ -150,43 +150,18 @@ app.post('/api/set-cookies', async (req, res) => {
         // Normalize cookies: Puppeteer on about:blank will silently reject cookies
         // if they don't have an explicit URL or if the domain isn't fully matched.
         let normalizedCookies = [];
-        let youtubeClones = [];
-
         cookies.forEach(c => {
-            // 1. Google Cookie
-            const gCookie = { ...c };
-            if (!gCookie.url && gCookie.domain) {
-                let d = gCookie.domain;
+            const cookie = { ...c };
+            if (!cookie.url && cookie.domain) {
+                let d = cookie.domain;
                 if (d.startsWith('.')) d = d.substring(1);
-                gCookie.url = `https://${d}`;
+                cookie.url = `https://${d}`;
             }
-            normalizedCookies.push(gCookie);
-
-            // 2. YouTube Clone
-            // We forcefully clone EVERY Google cookie over to YouTube's domain
-            // Because YouTube checks SAPISID, APISID, SSID, HSID, SID, plus SECURE ones.
-            const ytCookie = { ...gCookie };
-            ytCookie.domain = '.youtube.com';
-            ytCookie.url = 'https://youtube.com';
-            youtubeClones.push(ytCookie);
+            normalizedCookies.push(cookie);
         });
 
-        // Inject both domains
-        await page.setCookie(...normalizedCookies, ...youtubeClones);
-
-        // --- YouTube SSO (Single Sign-On) Magic ---
-        try {
-            const browserInstance = page.browser();
-            const ssoPage = await browserInstance.newPage();
-            // Visit YouTube directly so its internal JS sees the cloned cookies and confirms the session
-            await ssoPage.goto('https://www.youtube.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => { });
-            await new Promise(r => setTimeout(r, 3000));
-            await ssoPage.close().catch(() => { });
-        } catch (ssoError) {
-            console.error(`[SSO Warning] Could not sync YouTube: ${ssoError.message}`);
-        }
-
-        res.json({ success: true, message: 'Cookies injected and SSO synchronized for Google & YouTube.' });
+        await page.setCookie(...normalizedCookies);
+        res.json({ success: true, message: 'Cookies injected successfully.' });
     } catch (e) {
         console.error(`[Cookies Error] ${accountId}: ${e.message}`);
         res.status(500).json({ error: e.message });
