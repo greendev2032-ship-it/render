@@ -2,9 +2,13 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
-const { connect } = require('puppeteer-real-browser');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const UserAgent = require('user-agents');
 const path = require('path');
 const fs = require('fs');
+
+puppeteer.use(StealthPlugin());
 
 const app = express();
 const server = http.createServer(app);
@@ -35,8 +39,10 @@ async function getSession(accountId) {
     const userDataDir = path.join(PROFILE_DIR, accountId);
 
     try {
-        const { browser, page } = await connect({
+        const browser = await puppeteer.launch({
             headless: 'new',
+            userDataDir,
+            ignoreDefaultArgs: ["--enable-automation"],
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -44,12 +50,50 @@ async function getSession(accountId) {
                 '--disable-blink-features=AutomationControlled',
                 '--window-size=1280,800',
                 '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--allow-running-insecure-content',
+                '--disable-notifications',
+                '--disable-infobars',
             ],
-            customConfig: {
-                userDataDir,
-                // puppeteer-real-browser automatically handles user-agent, navigator.webdriver, plugins, etc. natively
-            },
-            turnstile: true // Auto-solves cloudflare turnstile
+        });
+
+        const page = await browser.newPage();
+
+        // Generate a highly realistic Windows Desktop user agent
+        const userAgent = new UserAgent({ deviceCategory: 'desktop', platform: 'Win32' });
+        await page.setUserAgent(userAgent.toString());
+
+        // Deep Anti-Bot Evasion Script
+        await page.evaluateOnNewDocument(() => {
+            // 1. Completely mock the webdriver property
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+            // 2. Mock Chrome runtime
+            window.chrome = { runtime: {}, app: {}, csid: {}, loadTimes: () => { } };
+
+            // 3. Spoof plugins (Puppeteer headless has 0 plugins, human Chrome has PDF viewer)
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [
+                    {
+                        0: { type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format", enabledPlugin: Plugin },
+                        description: "Portable Document Format",
+                        filename: "internal-pdf-viewer",
+                        length: 1,
+                        name: "Chrome PDF Plugin"
+                    }
+                ],
+            });
+
+            // 4. Spoof languages
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+            // 5. Spoof permissions API to never return 'denied' for notifications (common headless check)
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
         });
 
         await page.setViewport({ width: 1280, height: 800 });
