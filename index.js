@@ -4,6 +4,7 @@ const http = require('http');
 const { Server } = require("socket.io");
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const UserAgent = require('user-agents');
 const path = require('path');
 const fs = require('fs');
 
@@ -52,21 +53,38 @@ async function getSession(accountId) {
             '--allow-running-insecure-content',
             '--disable-notifications',
             '--disable-popup-blocking',
-            // Pass a real-looking Windows Chrome User Agent
-            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         ],
     });
 
     const page = await browser.newPage();
 
-    // Hide webdriver property which is a dead giveaway for Google
+    // Generate a highly realistic Windows Desktop user agent
+    const userAgent = new UserAgent({ deviceCategory: 'desktop', platform: 'Win32' });
+    await page.setUserAgent(userAgent.toString());
+
+    // Advanced Stealth: Hide webdriver and mock plugins/languages
     await page.evaluateOnNewDocument(() => {
-        Object.defineProperty(navigator, 'webdriver', {
-            get: () => false,
+        // 1. Pass webdriver check
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+
+        // 2. Pass chrome execution check
+        window.navigator.chrome = { runtime: {}, app: {}, csid: {}, loadTimes: {} };
+
+        // 3. Pass plugins check
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [
+                {
+                    0: { type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format", enabledPlugin: Plugin },
+                    description: "Portable Document Format",
+                    filename: "internal-pdf-viewer",
+                    length: 1,
+                    name: "Chrome PDF Plugin"
+                }
+            ],
         });
-        window.navigator.chrome = {
-            runtime: {},
-        };
+
+        // 4. Pass languages check
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
     });
 
     await page.setViewport({ width: 1280, height: 800 });
