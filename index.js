@@ -153,7 +153,7 @@ app.post('/api/click-coords', async (req, res) => {
         console.log(`[Click-Coords] Account ${accountId} clicked at (${x}, ${y})`);
 
         // Auto-screenshot after click so user sees the result
-        await page.waitForTimeout(600);
+        await new Promise(r => setTimeout(r, 600));
         const screenshot = await page.screenshot({ encoding: 'base64' });
         const title = await page.title();
         const currentUrl = page.url();
@@ -174,7 +174,7 @@ app.post('/api/key', async (req, res) => {
         await page.keyboard.press(key);
         console.log(`[Key] Account ${accountId} pressed: ${key}`);
 
-        await page.waitForTimeout(400);
+        await new Promise(r => setTimeout(r, 400));
         const screenshot = await page.screenshot({ encoding: 'base64' });
         res.json({ success: true, screenshot, title: await page.title(), currentUrl: page.url() });
     } catch (e) {
@@ -193,7 +193,7 @@ app.post('/api/scroll', async (req, res) => {
         await page.mouse.wheel({ deltaY: Number(deltaY) });
         console.log(`[Scroll] Account ${accountId} scrolled by ${deltaY}px`);
 
-        await page.waitForTimeout(400);
+        await new Promise(r => setTimeout(r, 400));
         const screenshot = await page.screenshot({ encoding: 'base64' });
         res.json({ success: true, screenshot, title: await page.title(), currentUrl: page.url() });
     } catch (e) {
