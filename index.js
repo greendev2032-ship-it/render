@@ -12,7 +12,12 @@ puppeteer.use(StealthPlugin());
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: { origin: "*" }
+    cors: { origin: "*", methods: ["GET", "POST"] },
+    allowEIO3: true,
+    pingInterval: 25000,   // send ping every 25s
+    pingTimeout: 20000,    // wait 20s for pong before disconnect
+    transports: ['polling', 'websocket'], // start with polling, upgrade if possible
+    maxHttpBufferSize: 10e6 // 10MB to handle large base64 frames
 });
 
 app.use(express.json());
