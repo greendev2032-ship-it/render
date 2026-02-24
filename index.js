@@ -165,11 +165,16 @@ app.post('/api/set-cookies', async (req, res) => {
         // --- YouTube SSO (Single Sign-On) Magic ---
         // Just injecting cookies isn't enough for YouTube anymore. We must force
         // Google to officially issue YouTube cookies by visiting the ServiceLogin.
-        const ssoPage = await browser.newPage();
-        await ssoPage.goto('https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com/&hl=en', { waitUntil: 'load', timeout: 15000 }).catch(() => { });
-        // Wait briefly for redirect to finish setting YouTube cookies
-        await new Promise(r => setTimeout(r, 2000));
-        await ssoPage.close().catch(() => { });
+        try {
+            const browserInstance = page.browser();
+            const ssoPage = await browserInstance.newPage();
+            await ssoPage.goto('https://accounts.google.com/ServiceLogin?service=youtube&continue=https://www.youtube.com/&hl=en', { waitUntil: 'load', timeout: 15000 }).catch(() => { });
+            // Wait briefly for redirect to finish setting YouTube cookies
+            await new Promise(r => setTimeout(r, 2000));
+            await ssoPage.close().catch(() => { });
+        } catch (ssoError) {
+            console.error(`[SSO Warning] Could not sync YouTube: ${ssoError.message}`);
+        }
 
         res.json({ success: true, message: 'Cookies injected and SSO synchronized.' });
     } catch (e) {
