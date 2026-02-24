@@ -146,7 +146,21 @@ app.post('/api/set-cookies', async (req, res) => {
     try {
         console.log(`[Cookies] Injecting ${cookies.length} cookies for ${accountId}`);
         const { page } = await getSession(accountId);
-        await page.setCookie(...cookies);
+
+        // Normalize cookies: Puppeteer on about:blank will silently reject cookies
+        // if they don't have an explicit URL or if the domain isn't fully matched.
+        const normalizedCookies = cookies.map(c => {
+            const cookie = { ...c };
+            // Ensure the URL exists based on the domain so Puppeteer accepts it
+            if (!cookie.url && cookie.domain) {
+                let d = cookie.domain;
+                if (d.startsWith('.')) d = d.substring(1);
+                cookie.url = `https://${d}`;
+            }
+            return cookie;
+        });
+
+        await page.setCookie(...normalizedCookies);
         res.json({ success: true, message: 'Cookies injected successfully.' });
     } catch (e) {
         console.error(`[Cookies Error] ${accountId}: ${e.message}`);
