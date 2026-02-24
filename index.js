@@ -152,8 +152,24 @@ app.post('/api/click-coords', async (req, res) => {
         await page.mouse.click(Number(x), Number(y));
         console.log(`[Click-Coords] Account ${accountId} clicked at (${x}, ${y})`);
 
-        // Auto-screenshot after click so user sees the result
-        await new Promise(r => setTimeout(r, 600));
+        // Inject a visible red dot exactly where we clicked so we can debug it on the screenshot
+        await page.evaluate((cx, cy) => {
+            const dot = document.createElement('div');
+            dot.style.position = 'absolute';
+            dot.style.left = (cx - 10) + 'px';
+            dot.style.top = (cy - 10) + 'px';
+            dot.style.width = '20px';
+            dot.style.height = '20px';
+            dot.style.background = 'rgba(255, 0, 0, 0.7)';
+            dot.style.borderRadius = '50%';
+            dot.style.zIndex = '999999';
+            dot.style.pointerEvents = 'none';
+            document.body.appendChild(dot);
+            setTimeout(() => dot.remove(), 2000);
+        }, Number(x), Number(y));
+
+        // Auto-screenshot after interaction. Wait a bit longer so SPA frameworks have time to render.
+        await new Promise(r => setTimeout(r, 1200));
         const screenshot = await page.screenshot({ encoding: 'base64' });
         const title = await page.title();
         const currentUrl = page.url();
