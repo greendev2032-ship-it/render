@@ -147,16 +147,11 @@ app.post('/api/set-cookies', async (req, res) => {
         console.log(`[Cookies] Injecting ${cookies.length} cookies for ${accountId}`);
         const { page } = await getSession(accountId);
 
-        // Normalize cookies: Puppeteer on about:blank will silently reject cookies
-        // if they don't have an explicit URL or if the domain isn't fully matched.
-        // Normalize cookies and silently clone auth cookies to other Google domains
+        // Normalize cookies and clone ALL to YouTube domain
+        // KEY INSIGHT: Cloning only 7 cookies failed. YouTube needs ALL of them.
+        // The previous "signed out" ban was caused by opening background tabs,
+        // NOT by the cookie cloning itself. So we clone everything but open NOTHING.
         let normalizedCookies = [];
-
-        // These are the ONLY cookies that matter for Google SSO across services
-        const AUTH_COOKIE_NAMES = ['SID', 'HSID', 'SSID', 'APISID', 'SAPISID', '__Secure-1PSID', '__Secure-3PSID'];
-
-        // All Google service domains that need the auth cookies
-        const GOOGLE_DOMAINS = ['.youtube.com', '.google.com'];
 
         cookies.forEach(c => {
             const cookie = { ...c };
@@ -167,27 +162,20 @@ app.post('/api/set-cookies', async (req, res) => {
             }
             normalizedCookies.push(cookie);
 
-            // Silently clone ONLY critical auth cookies to other Google domains
-            // No background tabs, no network requests = Google cannot detect this
-            if (AUTH_COOKIE_NAMES.includes(cookie.name)) {
-                for (const domain of GOOGLE_DOMAINS) {
-                    // Skip if cookie is already for this domain
-                    if (cookie.domain === domain) continue;
-                    let cleanDomain = domain;
-                    if (cleanDomain.startsWith('.')) cleanDomain = cleanDomain.substring(1);
-                    normalizedCookies.push({
-                        ...cookie,
-                        domain: domain,
-                        url: `https://${cleanDomain}`
-                    });
-                }
+            // Clone every single cookie to .youtube.com
+            if (cookie.domain && cookie.domain.includes('google')) {
+                normalizedCookies.push({
+                    ...cookie,
+                    domain: '.youtube.com',
+                    url: 'https://youtube.com'
+                });
             }
         });
 
-        console.log(`[Cookies] Injecting ${normalizedCookies.length} total cookies (original + SSO clones) for ${accountId}`);
+        console.log(`[Cookies] Injecting ${normalizedCookies.length} total cookies (${cookies.length} original + ${normalizedCookies.length - cookies.length} YouTube clones) for ${accountId}`);
         await page.setCookie(...normalizedCookies);
 
-        res.json({ success: true, message: `Cookies injected: ${cookies.length} original + ${normalizedCookies.length - cookies.length} SSO clones` });
+        res.json({ success: true, message: `Cookies injected: ${cookies.length} original + ${normalizedCookies.length - cookies.length} YouTube clones. Navigate to YouTube/Colab yourself!` });
     } catch (e) {
         console.error(`[Cookies Error] ${accountId}: ${e.message}`);
         res.status(500).json({ error: e.message });
