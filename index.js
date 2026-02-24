@@ -1,5 +1,7 @@
 require('dotenv').config();
 const express = require('express');
+const http = require('http');
+const { Server } = require("socket.io");
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const path = require('path');
@@ -8,6 +10,11 @@ const fs = require('fs');
 puppeteer.use(StealthPlugin());
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: { origin: "*" }
+});
+
 app.use(express.json());
 
 const PROFILE_DIR = process.env.PROFILE_DIR || path.join(__dirname, 'profiles');
@@ -232,8 +239,90 @@ app.post('/api/run-task', async (req, res) => {
     }
 });
 
+// ─── WEBSOCKET STREAMING & REAL-TIME INTERACTION ─────────────────────────────
+io.on('connection', (socket) => {
+    console.log(`[Socket] Client connected: ${socket.id}`);
+    let streamInterval = null;
+    let currentAccount = null;
+
+    // Start streaming frames for a specific account
+    socket.on('start-stream', async (accountId) => {
+        if (!accountId) return;
+        currentAccount = accountId;
+        console.log(`[Socket] Starting stream for ${accountId}`);
+
+        try {
+            const { page } = await getSession(accountId);
+
+            // Broadcast loop: ~10 FPS
+            if (streamInterval) clearInterval(streamInterval);
+            streamInterval = setInterval(async () => {
+                if (socket.disconnected) return clearInterval(streamInterval);
+                try {
+                    const screenshot = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 50 });
+                    socket.emit('browser-frame', screenshot);
+                } catch (e) {
+                    // Ignore errors during navigation/reloads
+                }
+            }, 100); // 100ms = 10 FPS
+
+        } catch (e) {
+            console.error(`[Socket] Stream start error: ${e.message}`);
+        }
+    });
+
+    // Handle real-time interactions
+    socket.on('mouse-move', async ({ x, y }) => {
+        if (!currentAccount) return;
+        try {
+            const { page } = await getSession(currentAccount);
+            await page.mouse.move(x, y);
+        } catch (e) { }
+    });
+
+    socket.on('mouse-click', async ({ x, y }) => {
+        if (!currentAccount) return;
+        try {
+            const { page } = await getSession(currentAccount);
+            await page.mouse.click(x, y);
+            console.log(`[Socket] Clicked at ${x}, ${y}`);
+        } catch (e) { }
+    });
+
+    socket.on('keyboard-press', async (key) => {
+        if (!currentAccount) return;
+        try {
+            const { page } = await getSession(currentAccount);
+            await page.keyboard.press(key);
+            console.log(`[Socket] Pressed ${key}`);
+        } catch (e) { }
+    });
+
+    socket.on('keyboard-type', async (text) => {
+        if (!currentAccount) return;
+        try {
+            const { page } = await getSession(currentAccount);
+            await page.keyboard.type(text);
+            console.log(`[Socket] Typed text`);
+        } catch (e) { }
+    });
+
+    socket.on('scroll', async (deltaY) => {
+        if (!currentAccount) return;
+        try {
+            const { page } = await getSession(currentAccount);
+            await page.mouse.wheel({ deltaY });
+        } catch (e) { }
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`[Socket] Client disconnected: ${socket.id}`);
+        if (streamInterval) clearInterval(streamInterval);
+    });
+});
+
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
     console.log(`\n🚀 Worker Server listening on port ${PORT}`);
     console.log(`📁 Profiles directory: ${PROFILE_DIR}`);
     console.log(`🎮 Control APIs ready: /api/navigate | /api/screenshot | /api/click | /api/type\n`);
