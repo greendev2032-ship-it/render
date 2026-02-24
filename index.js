@@ -38,18 +38,37 @@ async function getSession(accountId) {
     const userDataDir = path.join(PROFILE_DIR, accountId);
 
     const browser = await puppeteer.launch({
-        headless: true,
+        headless: 'new', // Use the new headless mode which is harder to detect
         userDataDir,
+        ignoreDefaultArgs: ["--enable-automation"], // Crucial to hide automation bar and flags
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-blink-features=AutomationControlled',
             '--window-size=1280,800',
+            '--disable-web-security',
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--allow-running-insecure-content',
+            '--disable-notifications',
+            '--disable-popup-blocking',
+            // Pass a real-looking Windows Chrome User Agent
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         ],
     });
 
     const page = await browser.newPage();
+
+    // Hide webdriver property which is a dead giveaway for Google
+    await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => false,
+        });
+        window.navigator.chrome = {
+            runtime: {},
+        };
+    });
+
     await page.setViewport({ width: 1280, height: 800 });
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
 
