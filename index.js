@@ -137,6 +137,31 @@ app.get('/', (req, res) => {
 
 // ─── NAVIGATE ────────────────────────────────────────────────────────────────
 // Go to a URL for a specific account
+app.post('/api/delete-session', async (req, res) => {
+    const { accountId } = req.body;
+    if (!accountId) return res.status(400).json({ error: 'accountId required' });
+
+    try {
+        console.log(`[Delete] Purging session: ${accountId}`);
+        // 1. Close browser if active
+        if (sessions[accountId]) {
+            await sessions[accountId].browser.close().catch(() => { });
+            delete sessions[accountId];
+        }
+
+        // 2. Wipe physical profile from disk
+        const userDataDir = path.join(PROFILE_DIR, accountId);
+        if (fs.existsSync(userDataDir)) {
+            fs.rmSync(userDataDir, { recursive: true, force: true });
+        }
+
+        res.json({ success: true, message: `Session ${accountId} completely purged.` });
+    } catch (e) {
+        console.error(`[Delete Error] ${accountId}: ${e.message}`);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.post('/api/navigate', async (req, res) => {
     const { accountId, url } = req.body;
     if (!accountId || !url) return res.status(400).json({ error: 'accountId and url are required' });
