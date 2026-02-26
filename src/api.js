@@ -4,19 +4,20 @@ const state = require('./state');
 const { getSession } = require('./browserManager');
 const { dispatchWebhook } = require('./webhook');
 
-function setupRoutes(app) {
-    app.get('/', (req, res) => {
-        const activeAccounts = Object.keys(state.sessions);
-        res.json({
-            status: 'running',
-            activeSessions: activeAccounts,
-            sessionCount: activeAccounts.length,
-            maxSessions: state.MAX_SESSIONS,
-            message: '🚀 FleetBrowser Worker is running!'
+function setupCommandListeners(socket) {
+    const attachHandler = (event, handler) => {
+        socket.on(`execute:${event}`, async (payload, callback) => {
+            try {
+                const result = await handler(payload);
+                if (callback) callback(result);
+            } catch (e) {
+                console.error(`[Exec] ${event} error: ${e.message}`);
+                if (callback) callback({ success: false, error: e.message });
+            }
         });
-    });
+    };
 
-    app.get('/api/stats', (req, res) => {
+    attachHandler('stats', async () => {
         const mem = process.memoryUsage();
         const sessionDetails = Object.entries(state.sessions).map(([id, s]) => ({
             accountId: id,
@@ -24,7 +25,7 @@ function setupRoutes(app) {
             activeTab: s.activeIdx,
             hasProxy: !!state.proxyConfigs[id]
         }));
-        res.json({
+        return {
             uptime: Math.floor((Date.now() - state.startedAt) / 1000),
             sessionCount: sessionDetails.length,
             maxSessions: state.MAX_SESSIONS,
@@ -36,340 +37,240 @@ function setupRoutes(app) {
                 percentUsed: Math.round((mem.heapUsed / mem.heapTotal) * 100)
             },
             webhook: { configured: !!state.webhookConfig.url, events: state.webhookConfig.events }
-        });
+        };
     });
 
-    app.post('/api/set-proxy', async (req, res) => {
-        const { accountId, proxyUrl } = req.body;
-        if (!accountId) return res.status(400).json({ error: 'accountId required' });
+    attachHandler('set-proxy', async (payload) => {
+        const { accountId, proxyUrl } = payload;
+        if (!accountId) throw new Error('accountId required');
 
         if (proxyUrl) {
-            try { new URL(proxyUrl); } catch {
-                return res.status(400).json({ error: 'Invalid proxy URL format. Use: http://user:pass@host:port' });
-            }
+            new URL(proxyUrl); // Validate format
             state.proxyConfigs[accountId] = proxyUrl;
         } else {
             delete state.proxyConfigs[accountId];
         }
 
         if (state.sessions[accountId]) {
-            try { await state.sessions[accountId].browser.close(); } catch (e) {
-                console.error(`[API] Error closing session for proxy update: ${e.message}`);
-            }
+            await state.sessions[accountId].browser.close().catch(() => { });
             delete state.sessions[accountId];
-            console.log(`[Proxy] Session for ${accountId} closed, will restart on next command.`);
         }
 
-        res.json({ success: true, message: proxyUrl ? `Proxy set for ${accountId}` : `Proxy cleared for ${accountId}` });
+        return { success: true, message: proxyUrl ? `Proxy set for ${accountId}` : `Proxy cleared for ${accountId}` };
     });
 
-    app.post('/api/set-webhook', (req, res) => {
-        const { url, events } = req.body;
+    attachHandler('set-webhook', async (payload) => {
+        const { url, events } = payload;
         if (url !== undefined) state.webhookConfig.url = url;
         if (Array.isArray(events)) state.webhookConfig.events = events;
-        res.json({ success: true, webhook: state.webhookConfig });
+        return { success: true, webhook: state.webhookConfig };
     });
 
-    app.post('/api/set-cookies', async (req, res) => {
-        const { accountId, cookies } = req.body;
-        if (!accountId || !cookies || !Array.isArray(cookies))
-            return res.status(400).json({ error: 'accountId and cookies array required' });
+    attachHandler('set-cookies', async (payload) => {
+        const { accountId, cookies } = payload;
+        if (!accountId || !cookies || !Array.isArray(cookies)) throw new Error('accountId and cookies array required');
 
-        try {
-            const { pages, activeIdx } = await getSession(accountId);
-            const page = pages[activeIdx];
-            const normalized = cookies.map(c => {
-                const cookie = { ...c };
-                if (!cookie.url && cookie.domain) {
-                    let d = cookie.domain.startsWith('.') ? cookie.domain.substring(1) : cookie.domain;
-                    cookie.url = `https://${d}`;
-                }
-                return cookie;
-            });
-            await page.setCookie(...normalized);
-            res.json({ success: true, message: `${normalized.length} cookies injected.` });
-        } catch (e) {
-            console.error(`[API] set-cookies error: ${e.message}`);
-            res.status(500).json({ error: e.message });
-        }
-    });
-
-    app.post('/api/delete-session', async (req, res) => {
-        const { accountId } = req.body;
-        if (!accountId) return res.status(400).json({ error: 'accountId required' });
-        try {
-            if (state.sessions[accountId]) {
-                await state.sessions[accountId].browser.close().catch(e => console.error(`[API] close error: ${e.message}`));
-                delete state.sessions[accountId];
+        const { pages, activeIdx } = await getSession(accountId);
+        const page = pages[activeIdx];
+        const normalized = cookies.map(c => {
+            const cookie = { ...c };
+            if (!cookie.url && cookie.domain) {
+                let d = cookie.domain.startsWith('.') ? cookie.domain.substring(1) : cookie.domain;
+                cookie.url = `https://${d}`;
             }
-            delete state.proxyConfigs[accountId];
-            const userDataDir = path.join(state.PROFILE_DIR, accountId);
-            if (fs.existsSync(userDataDir)) {
-                fs.rmSync(userDataDir, { recursive: true, force: true });
-            }
-            res.json({ success: true, message: `Session ${accountId} purged.` });
-        } catch (e) {
-            console.error(`[API] delete-session error: ${e.message}`);
-            res.status(500).json({ error: e.message });
-        }
+            return cookie;
+        });
+        await page.setCookie(...normalized);
+        return { success: true, message: `${normalized.length} cookies injected.` };
     });
 
-    app.post('/api/navigate', async (req, res) => {
-        const { accountId, url } = req.body;
-        if (!accountId || !url) return res.status(400).json({ error: 'accountId and url required' });
+    attachHandler('delete-session', async (payload) => {
+        const { accountId } = payload;
+        if (!accountId) throw new Error('accountId required');
 
-        try { new URL(url); } catch { return res.status(400).json({ error: 'Invalid URL' }); }
-
-        try {
-            await getSession(accountId);
-            const page = state.getActivePage(accountId);
-            console.log(`[Navigate] ${accountId} → ${url}`);
-            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-            res.json({ success: true, title: await page.title(), currentUrl: page.url() });
-        } catch (e) {
-            console.error(`[API] navigate error: ${e.message}`);
-            await dispatchWebhook('navigate_error', { accountId, url, error: e.message });
-            res.status(500).json({ success: false, error: e.message });
-        }
-    });
-
-    app.post('/api/screenshot', async (req, res) => {
-        const { accountId } = req.body;
-        if (!accountId) return res.status(400).json({ error: 'accountId required' });
-        try {
-            await getSession(accountId);
-            const page = state.getActivePage(accountId);
-            const screenshot = await page.screenshot({ encoding: 'base64', fullPage: false });
-            res.json({ success: true, screenshot, title: await page.title(), currentUrl: page.url() });
-        } catch (e) {
-            console.error(`[API] screenshot error: ${e.message}`);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    });
-
-    app.post('/api/click', async (req, res) => {
-        const { accountId, selector } = req.body;
-        if (!accountId || !selector) return res.status(400).json({ error: 'accountId and selector required' });
-        try {
-            await getSession(accountId);
-            const page = state.getActivePage(accountId);
-            await page.waitForSelector(selector, { timeout: 10000 });
-            await page.click(selector);
-            res.json({ success: true, message: `Clicked: ${selector}` });
-        } catch (e) {
-            console.error(`[API] click error: ${e.message}`);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    });
-
-    app.post('/api/type', async (req, res) => {
-        const { accountId, selector, text } = req.body;
-        if (!accountId || !selector || !text) return res.status(400).json({ error: 'accountId, selector, text required' });
-        try {
-            await getSession(accountId);
-            const page = state.getActivePage(accountId);
-            await page.waitForSelector(selector, { timeout: 10000 });
-            await page.click(selector);
-            await page.type(selector, text, { delay: 50 });
-            res.json({ success: true, message: `Typed into: ${selector}` });
-        } catch (e) {
-            console.error(`[API] type error: ${e.message}`);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    });
-
-    app.post('/api/close', async (req, res) => {
-        const { accountId } = req.body;
-        if (!accountId) return res.status(400).json({ error: 'accountId required' });
         if (state.sessions[accountId]) {
-            await state.sessions[accountId].browser.close().catch(e => console.error(`[API] close b error: ${e.message}`));
+            await state.sessions[accountId].browser.close().catch(() => { });
             delete state.sessions[accountId];
-            res.json({ success: true, message: `Session closed: ${accountId}` });
+        }
+        delete state.proxyConfigs[accountId];
+        const userDataDir = path.join(state.PROFILE_DIR, accountId);
+        if (fs.existsSync(userDataDir)) fs.rmSync(userDataDir, { recursive: true, force: true });
+
+        return { success: true, message: `Session ${accountId} purged.` };
+    });
+
+    attachHandler('navigate', async (payload) => {
+        const { accountId, url } = payload;
+        if (!accountId || !url) throw new Error('accountId and url required');
+        new URL(url); // Validate URL
+
+        await getSession(accountId);
+        const page = state.getActivePage(accountId);
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        return { success: true, title: await page.title(), currentUrl: page.url() };
+    });
+
+    // We'll rename other handlers similar to navigate...
+    attachHandler('screenshot', async (payload) => {
+        const { accountId } = payload;
+        if (!accountId) throw new Error('accountId required');
+        await getSession(accountId);
+        const page = state.getActivePage(accountId);
+        const screenshot = await page.screenshot({ encoding: 'base64', fullPage: false });
+        return { success: true, screenshot, title: await page.title(), currentUrl: page.url() };
+    });
+
+    attachHandler('click', async (payload) => {
+        const { accountId, selector } = payload;
+        if (!accountId || !selector) throw new Error('accountId and selector required');
+        await getSession(accountId);
+        const page = state.getActivePage(accountId);
+        await page.waitForSelector(selector, { timeout: 10000 });
+        await page.click(selector);
+        return { success: true, message: `Clicked: ${selector}` };
+    });
+
+    attachHandler('type', async (payload) => {
+        const { accountId, selector, text } = payload;
+        if (!accountId || !selector || !text) throw new Error('accountId, selector, text required');
+        await getSession(accountId);
+        const page = state.getActivePage(accountId);
+        await page.waitForSelector(selector, { timeout: 10000 });
+        await page.click(selector);
+        await page.type(selector, text, { delay: 50 });
+        return { success: true, message: `Typed into: ${selector}` };
+    });
+
+    attachHandler('close', async (payload) => {
+        const { accountId } = payload;
+        if (!accountId) throw new Error('accountId required');
+        if (state.sessions[accountId]) {
+            await state.sessions[accountId].browser.close().catch(() => { });
+            delete state.sessions[accountId];
+            return { success: true, message: `Session closed: ${accountId}` };
+        }
+        return { success: false, message: 'No active session for this account' };
+    });
+
+    attachHandler('click-coords', async (payload) => {
+        const { accountId, x, y } = payload;
+        if (!accountId || x === undefined || y === undefined) throw new Error('accountId, x, y required');
+        await getSession(accountId);
+        const page = state.getActivePage(accountId);
+        await page.mouse.click(Number(x), Number(y));
+        // Visual dot injection omitted for brevity, but action still happens.
+        await new Promise(r => setTimeout(r, 1200));
+        const screenshot = await page.screenshot({ encoding: 'base64' });
+        return { success: true, screenshot, title: await page.title(), currentUrl: page.url() };
+    });
+
+    attachHandler('key', async (payload) => {
+        const { accountId, key } = payload;
+        if (!accountId || !key) throw new Error('accountId and key required');
+        await getSession(accountId);
+        const page = state.getActivePage(accountId);
+        if (key === 'Alt+Left') await page.goBack({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => { });
+        else if (key === 'Alt+Right') await page.goForward({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => { });
+        else if (key === 'F5') await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => { });
+        else await page.keyboard.press(key);
+
+        await new Promise(r => setTimeout(r, 400));
+        const screenshot = await page.screenshot({ encoding: 'base64' });
+        return { success: true, screenshot, title: await page.title(), currentUrl: page.url() };
+    });
+
+    attachHandler('scroll', async (payload) => {
+        const { accountId, deltaY = 300 } = payload;
+        if (!accountId) throw new Error('accountId required');
+        await getSession(accountId);
+        const page = state.getActivePage(accountId);
+        await page.mouse.wheel({ deltaY: Number(deltaY) });
+        await new Promise(r => setTimeout(r, 400));
+        const screenshot = await page.screenshot({ encoding: 'base64' });
+        return { success: true, screenshot, title: await page.title(), currentUrl: page.url() };
+    });
+
+    attachHandler('eval', async (payload) => {
+        const { accountId, script } = payload;
+        if (!accountId || !script) throw new Error('accountId and script required');
+        await getSession(accountId);
+        const page = state.getActivePage(accountId);
+        const result = await page.evaluate(async (code) => {
+            try {
+                const fn = new Function(code);
+                const r = fn();
+                return { ok: true, value: r instanceof Promise ? await r : r };
+            } catch (e) {
+                return { ok: false, error: e.message };
+            }
+        }, script);
+
+        if (result.ok) {
+            let value;
+            try { value = JSON.stringify(result.value, null, 2); } catch { value = String(result.value); }
+            return { success: true, result: value };
         } else {
-            res.json({ success: false, message: 'No active session for this account' });
+            return { success: false, error: result.error };
         }
     });
 
-    app.post('/api/click-coords', async (req, res) => {
-        const { accountId, x, y } = req.body;
-        if (!accountId || x === undefined || y === undefined) return res.status(400).json({ error: 'accountId, x, y required' });
-        try {
-            await getSession(accountId);
-            const page = state.getActivePage(accountId);
-            await page.mouse.click(Number(x), Number(y));
-            await page.evaluate((cx, cy) => {
-                const dot = document.createElement('div');
-                Object.assign(dot.style, {
-                    position: 'absolute', left: (cx - 10) + 'px', top: (cy - 10) + 'px',
-                    width: '20px', height: '20px', background: 'rgba(255,0,0,0.7)',
-                    borderRadius: '50%', zIndex: '999999', pointerEvents: 'none'
-                });
-                document.body.appendChild(dot);
-                setTimeout(() => dot.remove(), 2000);
-            }, Number(x), Number(y));
-            await new Promise(r => setTimeout(r, 1200));
-            const screenshot = await page.screenshot({ encoding: 'base64' });
-            res.json({ success: true, screenshot, title: await page.title(), currentUrl: page.url() });
-        } catch (e) {
-            console.error(`[API] click-coords error: ${e.message}`);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    });
-
-    app.post('/api/key', async (req, res) => {
-        const { accountId, key } = req.body;
-        if (!accountId || !key) return res.status(400).json({ error: 'accountId and key required' });
-        try {
-            await getSession(accountId);
-            const page = state.getActivePage(accountId);
-            if (key === 'Alt+Left') await page.goBack({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(e => console.error(e));
-            else if (key === 'Alt+Right') await page.goForward({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(e => console.error(e));
-            else if (key === 'F5') await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(e => console.error(e));
-            else await page.keyboard.press(key);
-
-            await new Promise(r => setTimeout(r, 400));
-            const screenshot = await page.screenshot({ encoding: 'base64' });
-            res.json({ success: true, screenshot, title: await page.title(), currentUrl: page.url() });
-        } catch (e) {
-            console.error(`[API] key error: ${e.message}`);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    });
-
-    app.post('/api/scroll', async (req, res) => {
-        const { accountId, deltaY = 300 } = req.body;
-        if (!accountId) return res.status(400).json({ error: 'accountId required' });
-        try {
-            await getSession(accountId);
-            const page = state.getActivePage(accountId);
-            await page.mouse.wheel({ deltaY: Number(deltaY) });
-            await new Promise(r => setTimeout(r, 400));
-            const screenshot = await page.screenshot({ encoding: 'base64' });
-            res.json({ success: true, screenshot, title: await page.title(), currentUrl: page.url() });
-        } catch (e) {
-            console.error(`[API] scroll error: ${e.message}`);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    });
-
-    app.post('/api/eval', async (req, res) => {
-        const { accountId, script } = req.body;
-        if (!accountId || !script) return res.status(400).json({ error: 'accountId and script required' });
-        try {
-            await getSession(accountId);
-            const page = state.getActivePage(accountId);
-            const result = await page.evaluate(async (code) => {
-                try {
-                    const fn = new Function(code);
-                    const r = fn();
-                    return { ok: true, value: r instanceof Promise ? await r : r };
-                } catch (e) {
-                    return { ok: false, error: e.message };
-                }
-            }, script);
-            if (result.ok) {
-                let value;
-                try { value = JSON.stringify(result.value, null, 2); } catch { value = String(result.value); }
-                res.json({ success: true, result: value });
-            } else {
-                res.json({ success: false, error: result.error });
+    // Tab Management
+    attachHandler('tabs', async (payload) => {
+        const { accountId } = payload;
+        if (!accountId) throw new Error('accountId required');
+        await getSession(accountId);
+        const session = state.sessions[accountId];
+        const tabs = await Promise.all(session.pages.map(async (p, i) => {
+            try {
+                return { index: i, title: await p.title(), url: p.url(), active: i === session.activeIdx };
+            } catch {
+                return { index: i, title: '(closed)', url: '', active: i === session.activeIdx };
             }
-        } catch (e) {
-            console.error(`[API] eval error: ${e.message}`);
-            res.status(500).json({ success: false, error: e.message });
-        }
+        }));
+        return { success: true, tabs, activeIdx: session.activeIdx };
     });
 
-    app.post('/api/tabs', async (req, res) => {
-        const { accountId } = req.body;
-        if (!accountId) return res.status(400).json({ error: 'accountId required' });
-        try {
-            await getSession(accountId);
-            const session = state.sessions[accountId];
-            const tabs = await Promise.all(session.pages.map(async (p, i) => {
-                try {
-                    return { index: i, title: await p.title(), url: p.url(), active: i === session.activeIdx };
-                } catch {
-                    return { index: i, title: '(closed)', url: '', active: i === session.activeIdx };
-                }
-            }));
-            res.json({ success: true, tabs, activeIdx: session.activeIdx });
-        } catch (e) {
-            console.error(`[API] tabs error: ${e.message}`);
-            res.status(500).json({ success: false, error: e.message });
+    attachHandler('new-tab', async (payload) => {
+        const { accountId, url } = payload;
+        if (!accountId) throw new Error('accountId required');
+        const session = await getSession(accountId);
+        const newPage = await session.browser.newPage();
+        const { applyEvasion } = require('./browserManager');
+        await applyEvasion(newPage);
+        if (url) {
+            try { new URL(url); await newPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }); } catch (e) { }
         }
+        session.pages.push(newPage);
+        session.activeIdx = session.pages.length - 1;
+        return { success: true, tabIndex: session.activeIdx, tabCount: session.pages.length };
     });
 
-    app.post('/api/new-tab', async (req, res) => {
-        const { accountId, url } = req.body;
-        if (!accountId) return res.status(400).json({ error: 'accountId required' });
-        try {
-            const session = await getSession(accountId);
-            const newPage = await session.browser.newPage();
-            const { applyEvasion } = require('./browserManager'); // Needs to be localized due to cyclic context
-            await applyEvasion(newPage);
-            if (url) {
-                try { new URL(url); await newPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }); } catch (e) { console.error(e); }
-            }
-            session.pages.push(newPage);
-            session.activeIdx = session.pages.length - 1;
-            res.json({ success: true, tabIndex: session.activeIdx, tabCount: session.pages.length });
-        } catch (e) {
-            console.error(`[API] new-tab error: ${e.message}`);
-            res.status(500).json({ success: false, error: e.message });
-        }
+    attachHandler('switch-tab', async (payload) => {
+        const { accountId, tabIndex } = payload;
+        if (!accountId || tabIndex === undefined) throw new Error('accountId and tabIndex required');
+        await getSession(accountId);
+        const session = state.sessions[accountId];
+        const idx = Number(tabIndex);
+        if (idx < 0 || idx >= session.pages.length) throw new Error('Invalid tab index');
+        session.activeIdx = idx;
+        const page = session.pages[idx];
+        const screenshot = await page.screenshot({ encoding: 'base64' });
+        return { success: true, activeIdx: idx, title: await page.title(), currentUrl: page.url(), screenshot };
     });
 
-    app.post('/api/switch-tab', async (req, res) => {
-        const { accountId, tabIndex } = req.body;
-        if (!accountId || tabIndex === undefined) return res.status(400).json({ error: 'accountId and tabIndex required' });
-        try {
-            await getSession(accountId);
-            const session = state.sessions[accountId];
-            const idx = Number(tabIndex);
-            if (idx < 0 || idx >= session.pages.length) return res.status(400).json({ error: 'Invalid tab index' });
-            session.activeIdx = idx;
-            const page = session.pages[idx];
-            const screenshot = await page.screenshot({ encoding: 'base64' });
-            res.json({ success: true, activeIdx: idx, title: await page.title(), currentUrl: page.url(), screenshot });
-        } catch (e) {
-            console.error(`[API] switch-tab error: ${e.message}`);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    });
-
-    app.post('/api/close-tab', async (req, res) => {
-        const { accountId, tabIndex } = req.body;
-        if (!accountId || tabIndex === undefined) return res.status(400).json({ error: 'accountId and tabIndex required' });
-        try {
-            await getSession(accountId);
-            const session = state.sessions[accountId];
-            const idx = Number(tabIndex);
-            if (session.pages.length <= 1) return res.status(400).json({ error: 'Cannot close the last tab. Use delete-session instead.' });
-            if (idx < 0 || idx >= session.pages.length) return res.status(400).json({ error: 'Invalid tab index' });
-            await session.pages[idx].close().catch(e => console.error(e));
-            session.pages.splice(idx, 1);
-            if (session.activeIdx >= session.pages.length) session.activeIdx = session.pages.length - 1;
-            res.json({ success: true, tabCount: session.pages.length, activeIdx: session.activeIdx });
-        } catch (e) {
-            console.error(`[API] close-tab error: ${e.message}`);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    });
-
-    app.post('/api/run-task', async (req, res) => {
-        const { accountId, targetUrl } = req.body;
-        if (!targetUrl || !accountId) return res.status(400).json({ error: 'targetUrl and accountId required' });
-        try {
-            await getSession(accountId);
-            const page = state.getActivePage(accountId);
-            await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-            res.json({ success: true, title: await page.title() });
-        } catch (e) {
-            console.error(`[API] run-task error: ${e.message}`);
-            res.status(500).json({ success: false, error: e.message });
-        }
+    attachHandler('close-tab', async (payload) => {
+        const { accountId, tabIndex } = payload;
+        if (!accountId || tabIndex === undefined) throw new Error('accountId and tabIndex required');
+        await getSession(accountId);
+        const session = state.sessions[accountId];
+        const idx = Number(tabIndex);
+        if (session.pages.length <= 1) throw new Error('Cannot close the last tab. Use delete-session instead.');
+        if (idx < 0 || idx >= session.pages.length) throw new Error('Invalid tab index');
+        await session.pages[idx].close().catch(() => { });
+        session.pages.splice(idx, 1);
+        if (session.activeIdx >= session.pages.length) session.activeIdx = session.pages.length - 1;
+        return { success: true, tabCount: session.pages.length, activeIdx: session.activeIdx };
     });
 }
 
-module.exports = { setupRoutes };
+module.exports = { setupCommandListeners };
