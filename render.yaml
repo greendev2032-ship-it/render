@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: fleetbrowser-worker
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: MAX_SESSIONS
+        value: "10"
+      - key: ALLOWED_ORIGINS
+        value: "*"
